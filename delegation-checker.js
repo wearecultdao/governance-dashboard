@@ -16,10 +16,11 @@ const READ_RPCS = Object.freeze([
 
 const THEME_STORAGE_KEY = 'cultDelegationCheckerTheme:v1';
 const THEME_SEQUENCE = Object.freeze(['default', 'publish']);
+const CHECKER_USED_STORAGE_KEY = 'cultDelegationCheckerUsed:v1';
 const CACHE_DB_NAME = 'cultWastedVotesCache';
 const CACHE_DB_VERSION = 1;
 const CACHE_DB_STORE = 'caches';
-const STATIC_CACHE_URL = 'wasted-votes-data.json';
+const STATIC_CACHE_URL = 'historical-cult-governance-data.json';
 const WASTED_VOTES_CACHE_KEYS = Object.freeze([
     'cultWastedVotes:v6',
     'cultWastedVotes:v5',
@@ -89,6 +90,7 @@ async function checkWallets() {
         const rows = await mapLimit(entries, CHECK_CONCURRENCY, checkWalletEntry);
         currentRows = rows;
         renderRows(rows);
+        markCheckerUsedIfResolved(rows);
         const cacheWarning = getWastedVotesCacheWarning(rows);
         setStatus(
             cacheWarning || `Checked ${rows.length} wallet${rows.length === 1 ? '' : 's'}.`,
@@ -107,6 +109,20 @@ function clearChecker() {
     currentRows = [];
     renderRows([]);
     setStatus('Ready.');
+}
+
+function markCheckerUsedIfResolved(rows) {
+    if (!(rows || []).some((row) => row.address && row.status !== 'Error')) return;
+
+    try {
+        localStorage.setItem(CHECKER_USED_STORAGE_KEY, '1');
+    } catch {
+        // This is only a same-browser UX marker; failing to store it should not block results.
+    }
+
+    if (window.parent !== window) {
+        window.parent.postMessage({ type: 'cult-delegation-checker-used' }, '*');
+    }
 }
 
 async function ensureProvider() {
@@ -499,6 +515,7 @@ function renderReadinessAnswer(rows, validRows, readyRows, needsActionRows, noPo
 
     if (validRows.length === 1) {
         const row = validRows[0];
+        const roleFlags = getDelegateDutyRoleFlags(row);
         if (row.isReadyToVote) {
             setReadinessAnswer({
                 className: 'is-ready',
@@ -506,6 +523,7 @@ function renderReadinessAnswer(rows, validRows, readyRows, needsActionRows, noPo
                 status: row.status || 'Ready to Vote',
                 title: 'This wallet is ready to vote.',
                 body: `${row.votingRights}. ${formatTokenAmount(row.dCultBalance || 0, 2)} dCULT.`,
+                roleFlags,
             });
             return;
         }
@@ -516,7 +534,10 @@ function renderReadinessAnswer(rows, validRows, readyRows, needsActionRows, noPo
                 statusClass: row.statusClass || 'status-muted',
                 status: 'No Vote Power',
                 title: 'This wallet has no dCULT voting rights.',
-                body: 'No delegation action is needed unless this wallet should hold and vote dCULT.',
+                body: roleFlags.length
+                    ? 'No direct voting rights now. Cached history shows this wallet has delegated-power history tracked below.'
+                    : 'No delegation action is needed unless this wallet should hold and vote dCULT.',
+                roleFlags,
             });
             return;
         }
@@ -527,6 +548,7 @@ function renderReadinessAnswer(rows, validRows, readyRows, needsActionRows, noPo
             status: row.status || 'Not Ready',
             title: 'This wallet is not ready to vote directly.',
             body: row.nextStep || 'Action needed before voting.',
+            roleFlags,
         });
         return;
     }
@@ -573,15 +595,37 @@ function renderReadinessAnswer(rows, validRows, readyRows, needsActionRows, noPo
     });
 }
 
-function setReadinessAnswer({ className, statusClass, status, title, body }) {
+function setReadinessAnswer({ className, statusClass, status, title, body, roleFlags = [] }) {
     el.readinessAnswer.className = `checker-verdict-banner ${className || 'is-neutral'}`;
     el.readinessAnswer.innerHTML = `
-        <span class="status-flag ${statusClass || 'status-muted'}">${escapeHtml(status)}</span>
+        <span class="checker-status-flags">
+            <span class="status-flag ${statusClass || 'status-muted'}">${escapeHtml(status)}</span>
+            ${renderDelegateDutyRoleFlags(roleFlags)}
+        </span>
         <span class="checker-verdict-copy">
             <strong>${escapeHtml(title)}</strong>
             <span>${escapeHtml(body)}</span>
         </span>
     `;
+}
+
+function getDelegateDutyRoleFlags(row) {
+    const events = Array.isArray(row?.cachedDelegateDuty?.events) ? row.cachedDelegateDuty.events : [];
+    const roles = new Set(events.map((event) => event?.role).filter(Boolean));
+    const flags = [];
+    if (roles.has('delegator')) {
+        flags.push({ label: 'Delegator Wallet', className: 'status-delegated' });
+    }
+    if (roles.has('delegatee')) {
+        flags.push({ label: 'Delegatee Wallet', className: 'status-delegated' });
+    }
+    return flags;
+}
+
+function renderDelegateDutyRoleFlags(flags) {
+    return (flags || [])
+        .map((flag) => `<span class="status-flag ${flag.className || 'status-muted'}">${escapeHtml(flag.label)}</span>`)
+        .join('');
 }
 
 async function getCachedWastedVoteBreakdownForAddress(address) {
@@ -1106,6 +1150,7 @@ function renderRow(row) {
     const dutyCacheVisible = delegateDuty.cacheVisible !== false;
     const totalMissed = getCombinedMissedBreakdown(wasteBreakdown, delegateDuty);
     const historyDetails = renderWalletHistoryDetails(wasteBreakdown, delegateDuty, cacheVisible, dutyCacheVisible);
+    const roleFlags = getDelegateDutyRoleFlags(row);
 
     return `
         <div class="checker-wallet-entry">
@@ -1115,7 +1160,10 @@ function renderRow(row) {
                     <span class="event-meta">${row.ens ? escapeHtml(row.ens) : 'Wallet'}</span>
                 </div>
                 <div class="checker-status-cell">
-                    <span class="status-flag ${row.statusClass}">${escapeHtml(row.status)}</span>
+                    <span class="checker-status-flags">
+                        <span class="status-flag ${row.statusClass}">${escapeHtml(row.status)}</span>
+                        ${renderDelegateDutyRoleFlags(roleFlags)}
+                    </span>
                     <span class="event-meta">${delegationLabel}</span>
                 </div>
                 <div class="wallet-detail checker-needed-detail">
