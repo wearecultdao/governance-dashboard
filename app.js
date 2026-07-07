@@ -5550,7 +5550,7 @@ function renderDashboard(rows) {
 function renderGovernanceSnapshot(rows) {
     if (!el.governanceSnapshot) return;
     const reportRows = (rows || []).filter(isDelegateDutyReportable);
-    const mode = governanceSnapshotState.mode === 'average' ? 'average' : 'latest';
+    const mode = governanceSnapshotState.mode === 'average' ? 'average' : 'average';
     const snapshot = buildGovernanceSnapshot(reportRows, mode);
 
     if (!snapshot) {
