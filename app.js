@@ -126,7 +126,7 @@ const proposalDonutState = {
     delegateDuty: 'delegatees',
 };
 const governanceSnapshotState = {
-    mode: 'latest',
+    mode: 'average',
 };
 const sourceChartState = {
     mode: 'cumulative',
@@ -5550,7 +5550,7 @@ function renderDashboard(rows) {
 function renderGovernanceSnapshot(rows) {
     if (!el.governanceSnapshot) return;
     const reportRows = (rows || []).filter(isDelegateDutyReportable);
-    const mode = governanceSnapshotState.mode === 'average' ? 'average' : 'average';
+    const mode = governanceSnapshotState.mode === 'average' ? 'average' : 'latest';
     const snapshot = buildGovernanceSnapshot(reportRows, mode);
 
     if (!snapshot) {
