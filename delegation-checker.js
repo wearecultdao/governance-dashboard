@@ -16,11 +16,10 @@ const READ_RPCS = Object.freeze([
 
 const THEME_STORAGE_KEY = 'cultDelegationCheckerTheme:v1';
 const THEME_SEQUENCE = Object.freeze(['default', 'publish']);
-const CHECKER_USED_STORAGE_KEY = 'cultDelegationCheckerUsed:v1';
 const CACHE_DB_NAME = 'cultWastedVotesCache';
 const CACHE_DB_VERSION = 1;
 const CACHE_DB_STORE = 'caches';
-const STATIC_CACHE_URL = 'historical-cult-governance-data.json';
+const STATIC_CACHE_URL = 'wasted-votes-data.json';
 const WASTED_VOTES_CACHE_KEYS = Object.freeze([
     'cultWastedVotes:v6',
     'cultWastedVotes:v5',
@@ -90,7 +89,6 @@ async function checkWallets() {
         const rows = await mapLimit(entries, CHECK_CONCURRENCY, checkWalletEntry);
         currentRows = rows;
         renderRows(rows);
-        markCheckerUsedIfResolved(rows);
         const cacheWarning = getWastedVotesCacheWarning(rows);
         setStatus(
             cacheWarning || `Checked ${rows.length} wallet${rows.length === 1 ? '' : 's'}.`,
@@ -109,20 +107,6 @@ function clearChecker() {
     currentRows = [];
     renderRows([]);
     setStatus('Ready.');
-}
-
-function markCheckerUsedIfResolved(rows) {
-    if (!(rows || []).some((row) => row.address && row.status !== 'Error')) return;
-
-    try {
-        localStorage.setItem(CHECKER_USED_STORAGE_KEY, '1');
-    } catch {
-        // This is only a same-browser UX marker; failing to store it should not block results.
-    }
-
-    if (window.parent !== window) {
-        window.parent.postMessage({ type: 'cult-delegation-checker-used' }, '*');
-    }
 }
 
 async function ensureProvider() {
