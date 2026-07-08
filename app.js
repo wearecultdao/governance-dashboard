@@ -6485,7 +6485,7 @@ function renderGuardianSummaryDonut(summary, rows) {
         ? `${formatTokenAmount(lowestTopDcult, 0)} dCULT`
         : 'not indexed';
     const thresholdText = summary?.contractThresholdDcult
-        ? `${formatTokenAmount(summary.contractThresholdDcult, 2)} dCULT`
+        ? `${formatTokenAmount(summary.contractThresholdDcult, 0)} dCULT`
         : 'not indexed';
     const gapText = formatGuardianThresholdGap(summary?.contractThresholdDcult, lowestTopDcult);
     const centerPrimary = formatCountPercent(inside, total, 0);
