@@ -698,6 +698,8 @@ async function getCachedDelegateDutyForAddressSet(checkedAddresses) {
 }
 
 function isCanceledCachedProposal(proposal) {
+    if (isCanceledAfterPassingCachedProposal(proposal)) return false;
+
     const rawState = proposal?.proposal?.state ?? proposal?.state;
     const state = Number(rawState);
     if (Number.isFinite(state) && state === 2) return true;
@@ -706,6 +708,17 @@ function isCanceledCachedProposal(proposal) {
     if (stateName === 'canceled' || stateName === 'cancelled') return true;
 
     return Boolean(proposal?.proposal?.canceled || proposal?.canceled);
+}
+
+function isCanceledAfterPassingCachedProposal(proposal) {
+    const proposalData = proposal?.proposal || proposal || {};
+    const state = Number(proposalData.state ?? proposal?.state);
+    if (state !== 2 || proposalData.canceled === false) return false;
+
+    const forVotes = ethers.BigNumber.from(proposalData.forVotes || '0');
+    const againstVotes = ethers.BigNumber.from(proposalData.againstVotes || '0');
+    const eta = ethers.BigNumber.from(proposalData.eta || '0');
+    return forVotes.gt(againstVotes) && eta.isZero();
 }
 
 function collectDelegateDutyDetails(totals, proposal, delegateRow, dutyStatus, checkedAddresses) {

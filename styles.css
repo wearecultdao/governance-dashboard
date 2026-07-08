@@ -260,8 +260,24 @@ h3 {
     line-height: 1.7;
 }
 
+.checker-gate-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+}
+
 .checker-gate-close {
     min-width: 92px;
+}
+
+.checker-gate-skip {
+    min-width: 142px;
+    opacity: 0.72;
+}
+
+.checker-gate-skip:hover {
+    opacity: 1;
 }
 
 .checker-embed-content {
@@ -1342,6 +1358,284 @@ h3 {
     gap: 14px;
     align-items: center;
     padding: 12px;
+}
+
+.guardians-overview {
+    display: grid;
+    gap: 14px;
+}
+
+.guardian-overview-summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+}
+
+.guardian-overview-summary > div {
+    display: grid;
+    gap: 2px;
+    padding: 11px 12px;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 4px;
+}
+
+.guardian-overview-summary span,
+.guardian-overview-head {
+    color: var(--color-muted);
+    font-size: 0.78rem;
+}
+
+.guardian-overview-summary strong {
+    font-family: var(--font-mono);
+    font-size: 1.08rem;
+}
+
+.guardian-overview-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: -2px;
+}
+
+.guardian-view-toggle {
+    margin-left: auto;
+}
+
+.guardian-summary-donut {
+    display: grid;
+    align-items: center;
+    gap: 34px;
+    grid-template-columns: auto minmax(0, 1fr);
+    min-height: 154px;
+    padding: 16px 22px;
+}
+
+.guardian-summary-donut-chart {
+    display: grid;
+    gap: 2px;
+    justify-items: center;
+}
+
+.guardian-summary-donut-chart .proposal-donut-visual {
+    width: 104px;
+    height: 104px;
+}
+
+.guardian-summary-donut-chart .proposal-donut-center {
+    inset: 14px;
+}
+
+.guardian-summary-donut-chart .proposal-donut-center strong {
+    font-size: 0.78rem;
+}
+
+.guardian-summary-donut-chart .proposal-donut-caption {
+    display: none;
+}
+
+.guardian-summary-donut .proposal-donut-track {
+    stroke: rgba(255, 255, 255, 0.1);
+}
+
+.guardian-summary-donut .proposal-donut-segment {
+    pointer-events: stroke;
+    transition: opacity 0.16s ease, stroke-width 0.16s ease, filter 0.16s ease;
+}
+
+.guardian-summary-donut .proposal-donut-svg:hover .proposal-donut-segment {
+    opacity: 0.3;
+}
+
+.guardian-summary-donut .proposal-donut-svg:hover .proposal-donut-segment:hover {
+    opacity: 1;
+    stroke-width: 8.5;
+}
+
+.guardian-summary-donut .proposal-donut-segment.is-guardian-in {
+    stroke: rgba(0, 255, 0, 0.62);
+}
+
+.guardian-summary-donut .proposal-donut-segment.is-guardian-out {
+    stroke: rgba(255, 82, 82, 0.86);
+}
+
+.guardian-summary-donut-text {
+    display: grid;
+    align-items: center;
+    grid-template-columns: minmax(0, 1fr) minmax(230px, 0.78fr);
+    gap: 24px;
+    min-width: 0;
+}
+
+.guardian-summary-main {
+    min-width: 0;
+}
+
+.guardian-summary-main > span:first-child {
+    display: block;
+    color: rgba(255, 255, 255, 0.68);
+    font-size: 0.82rem;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.guardian-summary-breakdown {
+    display: grid;
+    gap: 0;
+    min-width: 0;
+}
+
+.guardian-summary-breakdown > span {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    color: rgba(255, 255, 255, 0.5);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    line-height: 1.2;
+    padding: 5px 0;
+}
+
+.guardian-summary-breakdown > span + span {
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.guardian-summary-breakdown strong {
+    color: rgba(255, 255, 255, 0.78);
+    font-size: 0.78rem;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+    text-align: right;
+}
+
+.guardian-overview-row {
+    grid-template-columns:
+        minmax(140px, 0.7fr)
+        minmax(170px, 1fr)
+        minmax(185px, 1fr)
+        minmax(145px, 0.82fr)
+        minmax(140px, 0.82fr);
+}
+
+.guardian-overview-table.is-simple .guardian-overview-row {
+    grid-template-columns:
+        48px
+        minmax(240px, 1fr)
+        minmax(190px, 0.68fr)
+        minmax(120px, 0.42fr);
+}
+
+.guardian-overview-simple-row {
+    align-items: center;
+    min-height: 58px;
+}
+
+.guardian-overview-head {
+    display: grid;
+    gap: 14px;
+    padding: 0 12px 2px;
+    font-family: var(--font-mono);
+}
+
+.guardian-overview-divider {
+    border-top: 1px solid var(--color-border);
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+    letter-spacing: 0;
+    margin-top: 2px;
+    padding: 11px 12px 0;
+}
+
+.guardian-overview-row .visual-label {
+    display: block;
+    margin-bottom: 2px;
+    color: var(--color-muted);
+    font-size: 0.76rem;
+}
+
+.guardian-overview-row strong {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 0.88rem;
+}
+
+.guardian-rank-cell {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    min-width: 0;
+}
+
+.guardian-rank-cell.is-compact {
+    justify-content: center;
+}
+
+.guardian-rank-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.055);
+    color: rgba(255, 255, 255, 0.84);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    font-weight: 800;
+    line-height: 1;
+}
+
+.guardian-rank-badge.is-missing-slot {
+    background: rgba(255, 82, 82, 0.9);
+    color: #fff;
+}
+
+.guardian-rank-badge.is-contract-only {
+    background:
+        linear-gradient(rgba(255, 182, 193, 0.28), rgba(255, 182, 193, 0.28)),
+        rgba(255, 255, 255, 0.06);
+    box-shadow: inset 0 0 0 1px rgba(255, 182, 193, 0.22);
+    color: rgba(255, 255, 255, 0.84);
+}
+
+.guardian-rank-copy {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+}
+
+.guardian-simple-wallet {
+    min-width: 0;
+}
+
+.guardian-simple-dcult {
+    color: rgba(255, 255, 255, 0.82);
+    font-weight: 600;
+}
+
+.guardian-simple-proposals {
+    color: rgba(255, 255, 255, 0.66);
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+    line-height: 1.25;
+    min-width: 0;
+}
+
+.guardian-simple-empty {
+    color: rgba(255, 255, 255, 0.36);
+}
+
+.guardian-overview-row .status-flag {
+    display: block;
+    margin-top: 5px;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+}
+
+.guardian-delegate-line .wallet-address {
+    font-size: inherit;
 }
 
 .reliability-row {
@@ -2558,6 +2852,24 @@ select {
     border-color: var(--color-text);
 }
 
+#refresh-guardians-overview {
+    min-height: 30px;
+    border-color: rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.045);
+    color: rgba(255, 255, 255, 0.68);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 5px 9px;
+    white-space: nowrap;
+}
+
+#refresh-guardians-overview:hover:not(:disabled) {
+    border-color: rgba(255, 255, 255, 0.28);
+    background: rgba(255, 255, 255, 0.075);
+    color: rgba(255, 255, 255, 0.84);
+}
+
 .toggle-button:disabled {
     cursor: default;
     opacity: 0.45;
@@ -2978,7 +3290,8 @@ select {
     .delegator-row,
     .checker-proof-row,
     .checker-history-summary,
-    .visual-table-row {
+    .visual-table-row,
+    .guardian-overview-head {
         grid-template-columns: 1fr 1fr;
     }
 
@@ -3013,6 +3326,14 @@ select {
 
     .source-chart-legend {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .guardian-overview-summary {
+        grid-template-columns: 1fr;
+    }
+
+    .guardian-summary-donut-text {
+        grid-template-columns: 1fr;
     }
 
     .risk-map-title,
@@ -3078,9 +3399,24 @@ select {
         grid-template-columns: 1fr;
     }
 
+    .guardian-summary-donut,
+    .guardian-summary-donut-text {
+        grid-template-columns: 1fr;
+    }
+
+    .guardian-summary-donut {
+        justify-items: center;
+    }
+
+    .guardian-summary-main,
+    .guardian-summary-breakdown {
+        width: 100%;
+    }
+
     .proposal-metrics,
     .info-grid,
     .averages-grid,
+    .guardian-overview-summary,
     .wallet-row,
     .delegate-duty-row,
     .delegatee-power-row,
@@ -3088,6 +3424,7 @@ select {
     .checker-proof-row,
     .checker-history-summary,
     .visual-table-row,
+    .guardian-overview-head,
     .checker-row,
     .checker-row.is-error {
         grid-template-columns: 1fr;

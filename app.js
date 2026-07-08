@@ -13,6 +13,7 @@ const DCULT_START_BLOCK = 14093760;
 const CULT_START_BLOCK = 14093760;
 const GUARDIAN_POOL_ID = 0;
 const FALLBACK_GUARDIAN_COUNT = 50;
+const GUARDIAN_OVERVIEW_SCHEMA = 'guardian-overview-v1';
 
 const GOVERNOR_ABI = Object.freeze([
     'function proposalCount() view returns (uint256)',
@@ -28,8 +29,8 @@ const DCULT_ABI = Object.freeze([
     'function delegates(address account) view returns (address)',
     'function getPastTotalSupply(uint256 blockNumber) view returns (uint256)',
     'function highestStakerInPool(uint256 pid,uint256 index) view returns (uint256 deposited,address addr)',
-    'function topStakerNumber() view returns (uint256)',
     'function totalSupply() view returns (uint256)',
+    'event Deposit(address indexed user,uint256 indexed pid,uint256 amount)',
     'event Transfer(address indexed from,address indexed to,uint256 value)',
     'event DelegateChanged(address indexed delegator,address indexed fromDelegate,address indexed toDelegate)',
 ]);
@@ -78,6 +79,7 @@ const LOCAL_STORAGE_CACHE_LIMIT = 4_500_000;
 const THEME_STORAGE_KEY = 'cultWastedVotesTheme:v2';
 const THEME_SEQUENCE = Object.freeze(['default', 'publish']);
 const CHECKER_USED_STORAGE_KEY = 'cultDelegationCheckerUsed:v1';
+const GUARDIAN_VIEW_STORAGE_KEY = 'cultGuardianOverviewView:v1';
 const ADDRESS_TOPIC_CHUNK_SIZE = 60;
 const CALL_CONCURRENCY = 4;
 const PROPOSAL_PAGE_SIZE = 10;
@@ -91,6 +93,7 @@ const VOTE_CAST_TOPIC = governorInterface.getEventTopic('VoteCast');
 const PROPOSAL_CREATED_TOPIC = governorInterface.getEventTopic('ProposalCreated');
 const TRANSFER_TOPIC = dcultInterface.getEventTopic('Transfer');
 const DELEGATE_CHANGED_TOPIC = dcultInterface.getEventTopic('DelegateChanged');
+const DEPOSIT_TOPIC = dcultInterface.getEventTopic('Deposit');
 
 let readProvider = null;
 let providerInfo = null;
@@ -190,6 +193,8 @@ let delegateDutyIndexToBlock = 0;
 let holderSnapshotIndexPromise = null;
 let holderSnapshotIndexToBlock = 0;
 const guardianSnapshotCache = new Map();
+let guardianOverviewPromise = null;
+let guardianOverviewViewMode = 'simple';
 const pendingBlockTimestampFetches = new Set();
 
 const el = {
@@ -198,6 +203,7 @@ const el = {
     copyAddressBtn: document.getElementById('copy-address-btn'),
     checkerGateOverlay: document.getElementById('checker-gate-overlay'),
     checkerGateClose: document.getElementById('checker-gate-close'),
+    checkerGateSkip: document.getElementById('checker-gate-skip'),
     etherscanLink: document.getElementById('etherscan-link'),
     disconnectBtn: document.getElementById('disconnect-btn'),
     refreshBtn: document.getElementById('refresh-btn'),
@@ -275,16 +281,21 @@ const el = {
     proposalList: document.getElementById('proposal-list'),
     proposalVisibleCount: document.getElementById('proposal-visible-count'),
     showMoreProposals: document.getElementById('show-more-proposals'),
+    guardiansOverviewStatus: document.getElementById('guardians-overview-status'),
+    guardiansOverview: document.getElementById('guardians-overview'),
+    refreshGuardiansOverview: document.getElementById('refresh-guardians-overview'),
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
     applySavedTheme();
+    applySavedGuardianOverviewViewMode();
     cache = await loadCache();
     updateDelegationCheckerGate();
 
     el.connectWalletBtn.addEventListener('click', handleWalletButtonClick);
     el.checkerGateOverlay?.addEventListener('click', handleDelegationCheckerGateOverlayClick);
     el.checkerGateClose?.addEventListener('click', hideDelegationCheckerGateNotice);
+    el.checkerGateSkip?.addEventListener('click', markDelegationCheckerUsed);
     el.copyAddressBtn.addEventListener('click', copyConnectedAddress);
     el.disconnectBtn.addEventListener('click', disconnectWallet);
     el.refreshBtn.addEventListener('click', () => initialize({ forceRefresh: true }));
@@ -313,6 +324,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     el.filterHideCanceled.addEventListener('change', handleProposalFilterChange);
     el.proposalTitleSearch.addEventListener('input', handleProposalFilterChange);
     el.showMoreProposals.addEventListener('click', showMoreProposals);
+    el.guardiansOverview?.addEventListener('click', handleGuardianOverviewClick);
+    el.refreshGuardiansOverview?.addEventListener('click', () => startGuardianOverviewRefresh({ force: true }));
     el.delegateePowerList.addEventListener('click', handleDelegateePowerListClick);
     el.delegateeReliabilityScatter.addEventListener('click', handleDelegateeReliabilityScatterClick);
     el.delegateeReliabilityScatter.addEventListener('mousemove', handleDelegateeReliabilityScatterPointerMove);
@@ -418,7 +431,7 @@ function updateDelegationCheckerGate() {
     const unlocked = hasUsedDelegationChecker();
     document.documentElement.classList.toggle('has-used-delegation-checker', unlocked);
 
-    for (const section of document.querySelectorAll('.visuals-details, .proposals-tool-details')) {
+    for (const section of document.querySelectorAll('.visuals-details, .proposals-tool-details, .guardians-tool-details')) {
         section.classList.toggle('is-checker-locked', !unlocked);
         section.setAttribute('aria-disabled', unlocked ? 'false' : 'true');
         if (!unlocked) section.open = false;
@@ -504,6 +517,7 @@ async function initialize(options = {}) {
 
         startCultSupplyTimelineIndex();
         await loadAndRenderProposalWindow();
+        renderGuardianOverview();
     } catch (error) {
         console.error(error);
         setStatus(error?.message || 'Unable to load wasted-vote data.', true);
@@ -1689,15 +1703,12 @@ async function getGuardianAddressesAtBlock(blockNumber) {
 }
 
 async function fetchGuardianAddressesAtBlock(blockNumber) {
-    const topStakerNumber = await dcultContract.topStakerNumber({ blockTag: blockNumber })
-        .then((value) => Math.max(0, Number(value.toString())))
-        .catch(() => FALLBACK_GUARDIAN_COUNT);
-    const limit = Math.min(FALLBACK_GUARDIAN_COUNT, topStakerNumber || FALLBACK_GUARDIAN_COUNT);
+    const limit = FALLBACK_GUARDIAN_COUNT;
     const rows = [];
     await mapLimit(Array.from({ length: limit }, (_, index) => index), CALL_CONCURRENCY, async (index) => {
         try {
             const row = await dcultContract.highestStakerInPool(GUARDIAN_POOL_ID, index, { blockTag: blockNumber });
-            const address = ethers.utils.getAddress(row.addr);
+            const address = ethers.utils.getAddress(getContractGuardianAddress(row));
             if (address.toLowerCase() !== ZERO_ADDRESS) rows.push(address);
         } catch {
             // Older snapshots or RPCs without archive support can fail per slot.
@@ -2070,11 +2081,22 @@ function normalizeDelegateRows(rows) {
 
 function isVoteOutcomeProposal(row) {
     const state = Number(row.proposal.state);
-    return [3, 4, 5, 7].includes(state);
+    return [3, 4, 5, 7].includes(state) || isCanceledAfterPassingProposal(row);
 }
 
 function isDelegateDutyReportable(row) {
-    return Number(row?.proposal?.state) !== 2;
+    return Number(row?.proposal?.state) !== 2 || isCanceledAfterPassingProposal(row);
+}
+
+function isCanceledAfterPassingProposal(row) {
+    const proposal = row?.proposal || row;
+    const state = Number(proposal?.state);
+    if (state !== 2 || proposal?.canceled === false) return false;
+
+    const forVotes = ethers.BigNumber.from(proposal?.forVotes || '0');
+    const againstVotes = ethers.BigNumber.from(proposal?.againstVotes || '0');
+    const eta = ethers.BigNumber.from(proposal?.eta || '0');
+    return forVotes.gt(againstVotes) && eta.isZero();
 }
 
 function getGuardianDcultSupply(row) {
@@ -5545,6 +5567,7 @@ function renderDashboard(rows) {
     renderDelegateePowerSection(rows);
 
     renderProposalList(rows);
+    renderGuardianOverview();
 }
 
 function renderGovernanceSnapshot(rows) {
@@ -6369,6 +6392,734 @@ function updateProposalListFooter(visibleCount, totalCount) {
     el.showMoreProposals.disabled = visibleCount >= totalCount;
     const isNarrowed = Boolean(proposalFilters.titleSearch || proposalFilters.executedOnly || proposalFilters.defeatedOnly);
     el.showMoreProposals.textContent = isNarrowed ? 'Load More' : 'Load Older Proposals';
+}
+
+function renderGuardianOverview(statusOverride = '') {
+    if (!el.guardiansOverview || !el.guardiansOverviewStatus) return;
+
+    const guardianCache = normalizeGuardianOverviewCache(cache?.guardianOverview);
+    const rows = Array.isArray(guardianCache.rows)
+        ? guardianCache.rows.filter((row) => row?.wallet && ethers.utils.isAddress(row.wallet))
+        : [];
+    const blockNumber = Number(guardianCache.blockNumber || 0);
+    const hasRows = Boolean(rows.length);
+    const isBuilding = Boolean(guardianOverviewPromise);
+
+    if (el.refreshGuardiansOverview) {
+        el.refreshGuardiansOverview.disabled = isBuilding || !readProvider;
+        el.refreshGuardiansOverview.textContent = isBuilding ? 'Refreshing...' : hasRows ? 'Refresh Guardians' : 'Build Guardians';
+    }
+
+    if (statusOverride) {
+        el.guardiansOverviewStatus.textContent = statusOverride;
+    } else if (hasRows) {
+        const blockText = blockNumber ? ` at block ${formatInteger(blockNumber)}` : '';
+        const slotText = getGuardianOverviewSlotSummaryText(guardianCache.summary);
+        el.guardiansOverviewStatus.textContent = `Contract guardian slots compared with reconstructed top-50 dCULT holders${blockText}.${slotText} To update your guardian status, stake some CULT or claim rewards and stake them. Decided proposal submissions use indexed governance data.`;
+    } else if (readProvider) {
+        el.guardiansOverviewStatus.textContent = 'No guardian overview data yet. Build it once to cache and export it with the historical dataset.';
+    } else {
+        el.guardiansOverviewStatus.textContent = 'Connect a wallet or public RPC to build the Guardians Overview.';
+    }
+
+    if (!hasRows) {
+        el.guardiansOverview.innerHTML = '<p class="empty-state">No guardian overview data yet.</p>';
+        return;
+    }
+
+    const summary = guardianCache.summary || {};
+    const viewMode = getGuardianOverviewViewMode();
+
+    el.guardiansOverview.innerHTML = `
+        <div class="guardian-overview-summary" aria-label="Guardian overview summary">
+            ${renderGuardianSummaryDonut(summary, rows)}
+        </div>
+        <div class="guardian-overview-toolbar">
+            ${renderGuardianOverviewViewToggle(viewMode)}
+        </div>
+        <div class="visual-table guardian-overview-table is-${escapeHtml(viewMode)}">
+            ${renderGuardianOverviewHead(viewMode)}
+            ${renderGuardianOverviewRows(rows, viewMode)}
+        </div>
+    `;
+}
+
+function renderGuardianOverviewViewToggle(viewMode) {
+    return `
+        <div class="chart-mode-toggle guardian-view-toggle" role="group" aria-label="Guardian list detail level">
+            <button class="chart-mode-button ${viewMode === 'simple' ? 'is-active' : ''}" type="button" data-guardian-view-mode="simple" aria-pressed="${viewMode === 'simple' ? 'true' : 'false'}">Simple</button>
+            <button class="chart-mode-button ${viewMode === 'detailed' ? 'is-active' : ''}" type="button" data-guardian-view-mode="detailed" aria-pressed="${viewMode === 'detailed' ? 'true' : 'false'}">Detailed</button>
+        </div>
+    `;
+}
+
+function renderGuardianOverviewHead(viewMode) {
+    if (viewMode === 'simple') {
+        return `
+            <div class="guardian-overview-row guardian-overview-head guardian-overview-simple-head" aria-hidden="true">
+                <span>Rank</span>
+                <span>Wallet</span>
+                <span>dCULT</span>
+                <span>Proposals</span>
+            </div>
+        `;
+    }
+
+    return `
+        <div class="guardian-overview-row guardian-overview-head" aria-hidden="true">
+            <span>Rank</span>
+            <span>Wallet / stake / delegation</span>
+            <span>dCULT</span>
+            <span>CULT wallet</span>
+            <span>Decided proposals</span>
+        </div>
+    `;
+}
+
+function renderGuardianSummaryDonut(summary, rows) {
+    const inside = Number(summary?.overlap || 0);
+    const outside = Number(summary?.trueTopOnly || 0);
+    const total = Number(summary?.trueTopCount || inside + outside || FALLBACK_GUARDIAN_COUNT);
+    const lowestTopDcult = getLowestTopFiftyDcultBalance(rows);
+    const lowestText = lowestTopDcult
+        ? `${formatTokenAmount(lowestTopDcult, 0)} dCULT`
+        : 'not indexed';
+    const thresholdText = summary?.contractThresholdDcult
+        ? `${formatTokenAmount(summary.contractThresholdDcult, 2)} dCULT`
+        : 'not indexed';
+    const gapText = formatGuardianThresholdGap(summary?.contractThresholdDcult, lowestTopDcult);
+    const centerPrimary = formatCountPercent(inside, total, 0);
+    const centerSecondary = `${formatInteger(inside)} / ${formatInteger(outside)} wallets`;
+    const insideTitle = getGuardianWalletSegmentTitle('Inside guardian slots', inside, total);
+    const outsideTitle = getGuardianWalletSegmentTitle('Outside guardian slots', outside, total);
+    const tooltip = [
+        'Top-50 by current dCULT vs contract guardian slots',
+        `Inside guardian slots: ${formatInteger(inside)} wallets`,
+        `Outside guardian slots: ${formatInteger(outside)} wallets`,
+        `Guardian threshold: ${thresholdText}`,
+        `Lowest current top-50 dCULT: ${lowestText}`,
+        `Gap: ${gapText}`,
+    ].join('\n');
+
+    return `
+        <div class="guardian-summary-donut" title="${escapeHtml(tooltip)}">
+            <div class="guardian-summary-donut-chart">
+                ${renderProposalMiniDonut([
+                    {
+                        label: 'Inside guardian slots',
+                        className: 'is-guardian-in',
+                        value: inside,
+                        title: insideTitle,
+                    },
+                    {
+                        label: 'Outside guardian slots',
+                        className: 'is-guardian-out',
+                        value: outside,
+                        title: outsideTitle,
+                    },
+                ], `${formatInteger(inside)} / ${formatInteger(outside)}`, '')}
+            </div>
+            <div class="guardian-summary-donut-text">
+                <div class="guardian-summary-main">
+                    <span>Top-50 inside guardian slots</span>
+                    <span class="value-subline">current top-50 dCULT stakers inside / outside contract guardian slots</span>
+                </div>
+                <div class="guardian-summary-breakdown">
+                    <span>
+                        <span>Guardian threshold</span>
+                        <strong>${escapeHtml(thresholdText)}</strong>
+                    </span>
+                    <span>
+                        <span>Top-50 floor</span>
+                        <strong>${escapeHtml(lowestText)}</strong>
+                    </span>
+                    <span>
+                        <span>Gap</span>
+                        <strong>${escapeHtml(gapText)}</strong>
+                    </span>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function getGuardianWalletSegmentTitle(label, count, total) {
+    return `${label}: ${formatInteger(count)} wallets (${formatCountPercent(count, total, 0)} of current top 50)`;
+}
+
+function formatGuardianThresholdGap(thresholdDcult, lowestTopDcult) {
+    if (!thresholdDcult || !lowestTopDcult) return 'not indexed';
+    const threshold = ethers.BigNumber.from(thresholdDcult || '0');
+    const topFloor = ethers.BigNumber.from(lowestTopDcult || '0');
+    if (threshold.isZero() || topFloor.isZero()) return 'not indexed';
+    if (topFloor.eq(threshold)) return 'same';
+
+    const diff = topFloor.gt(threshold)
+        ? topFloor.sub(threshold)
+        : threshold.sub(topFloor);
+    const direction = topFloor.gt(threshold) ? 'more for top-50' : 'less than threshold';
+    return `${formatTokenAmount(diff, 0)} dCULT ${direction}`;
+}
+
+function getLowestTopFiftyDcultBalance(rows) {
+    const topRows = (rows || []).filter((row) => row.trueRank);
+    if (!topRows.length) return null;
+
+    return topRows
+        .sort((a, b) => Number(b.trueRank || 0) - Number(a.trueRank || 0))[0]
+        ?.dcultBalance || null;
+}
+
+function getGuardianOverviewSlotSummaryText(summary) {
+    const slotsChecked = Number(summary?.contractSlotsChecked || 0);
+    const activeSeats = Number(summary?.contractGuardianCount || 0);
+    if (!slotsChecked || slotsChecked === activeSeats) return '';
+
+    const missing = Math.max(0, slotsChecked - activeSeats);
+    const emptySlots = Array.isArray(summary?.contractEmptySlots) ? summary.contractEmptySlots : [];
+    const failedSlots = Array.isArray(summary?.contractFailedSlots) ? summary.contractFailedSlots : [];
+    const slotDetails = formatGuardianSlotIssueText(emptySlots, failedSlots);
+    return ` ${formatInteger(slotsChecked)} contract slots checked; ${formatInteger(activeSeats)} active slot wallets found${missing ? `, ${formatInteger(missing)} empty/unread` : ''}${slotDetails}.`;
+}
+
+function formatGuardianSlotIssueText(emptySlots, failedSlots) {
+    const details = [];
+    if (emptySlots.length) details.push(`empty slot indexes ${emptySlots.map(formatInteger).join(', ')}`);
+    if (failedSlots.length) details.push(`unread slot indexes ${failedSlots.map(formatInteger).join(', ')}`);
+    return details.length ? ` (${details.join('; ')})` : '';
+}
+
+function renderGuardianOverviewRows(rows, viewMode = getGuardianOverviewViewMode()) {
+    const chunks = [];
+    let topGroupStarted = false;
+    let slotOnlyGroupStarted = false;
+    let outsideTopFiftyIndex = 0;
+
+    rows.forEach((row) => {
+        if (row.trueRank && !topGroupStarted) {
+            chunks.push(renderGuardianOverviewDivider('Top 50 stakers by current dCULT amount'));
+            topGroupStarted = true;
+        }
+
+        if (!row.trueRank && !slotOnlyGroupStarted) {
+            chunks.push(renderGuardianOverviewDivider('Guardian slots outside the current top 50 stakers'));
+            slotOnlyGroupStarted = true;
+        }
+
+        const displayRank = row.trueRank ? row.trueRank : ++outsideTopFiftyIndex;
+        chunks.push(renderGuardianOverviewRow(row, viewMode, displayRank));
+    });
+
+    return chunks.join('');
+}
+
+function renderGuardianOverviewDivider(label) {
+    return `<div class="guardian-overview-divider">${escapeHtml(label)}</div>`;
+}
+
+function renderGuardianOverviewRow(row, viewMode = getGuardianOverviewViewMode(), displayRank = null) {
+    const status = getGuardianOverviewStatusMeta(row.status);
+    const statusBadge = status.label
+        ? `<span class="status-flag ${status.className}">${escapeHtml(status.label)}</span>`
+        : '';
+    const proposalIds = getDecidedSubmittedProposalIds(row.submittedProposalIds);
+    const dcultBalance = ethers.BigNumber.from(row.dcultBalance || '0');
+    if (viewMode === 'simple') {
+        return `
+            <div class="visual-table-row guardian-overview-row guardian-overview-simple-row">
+                ${renderGuardianRankCell(row, { compact: true, proposalIds, displayRank })}
+                <div class="guardian-simple-wallet">${renderAddressLink(row.wallet)}</div>
+                <div>
+                    <strong class="guardian-simple-dcult">${formatTokenAmount(dcultBalance, 0)} dCULT</strong>
+                </div>
+                <div class="guardian-simple-proposals">
+                    ${renderGuardianSimpleProposals(proposalIds)}
+                </div>
+            </div>
+        `;
+    }
+
+    return `
+        <div class="visual-table-row guardian-overview-row">
+            ${renderGuardianRankCell(row, { proposalIds, displayRank })}
+            <div>
+                ${renderAddressLink(row.wallet)}
+                ${statusBadge}
+                ${renderGuardianStakerSinceInfo(row)}
+                ${renderGuardianDelegationInfo(row)}
+            </div>
+            <div>
+                <span class="visual-label">Current dCULT</span>
+                <strong>${formatTokenAmount(dcultBalance, 0)} dCULT</strong>
+            </div>
+            <div>
+                <span class="visual-label">Wallet CULT</span>
+                <strong>${formatTokenAmount(row.cultBalance || '0', 0)} CULT</strong>
+            </div>
+            <div>
+                <span class="visual-label">Submitted proposals</span>
+                <strong>${formatInteger(proposalIds.length)}</strong>
+                ${renderGuardianSubmittedProposals(proposalIds)}
+            </div>
+        </div>
+    `;
+}
+
+function renderGuardianRankCell(row, options = {}) {
+    const compact = Boolean(options.compact);
+    const hasTopRank = Boolean(row.trueRank);
+    const rankValue = Number(options.displayRank || 0) || (hasTopRank ? row.trueRank : row.contractSeatRank);
+    const topLine = hasTopRank
+        ? `Top-50 Staker #${formatInteger(row.trueRank)}`
+        : 'Outside Top 50';
+    const slotLine = row.contractSeatRank
+        ? `Guardian slot #${formatInteger(row.contractSeatRank)}`
+        : 'No guardian slot';
+    const badgeClass = getGuardianRankBadgeClass(row);
+    const tooltip = getGuardianRankTooltip(row, options.proposalIds, rankValue);
+
+    if (compact) {
+        return `
+            <div class="guardian-rank-cell is-compact">
+                <span class="guardian-rank-badge ${badgeClass}" title="${escapeHtml(tooltip)}">${formatInteger(rankValue || 0)}</span>
+            </div>
+        `;
+    }
+
+    return `
+        <div class="guardian-rank-cell">
+            <span class="guardian-rank-badge ${badgeClass}" title="${escapeHtml(tooltip)}">${formatInteger(rankValue || 0)}</span>
+            <span class="guardian-rank-copy">
+                <span class="visual-label">${escapeHtml(topLine)}</span>
+                <span class="value-subline">${escapeHtml(slotLine)}</span>
+            </span>
+        </div>
+    `;
+}
+
+function getGuardianRankBadgeClass(row) {
+    if (row?.trueRank && !row?.contractSeatRank) return 'is-missing-slot';
+    if (!row?.trueRank && row?.contractSeatRank) return 'is-contract-only';
+    return '';
+}
+
+function getGuardianRankTooltip(row, proposalIds = null, displayRank = null) {
+    const status = getGuardianOverviewStatusMeta(row.status);
+    const ids = Array.isArray(proposalIds) ? proposalIds : getDecidedSubmittedProposalIds(row.submittedProposalIds);
+    const stakerSince = formatGuardianSinceDate(row?.stakerSinceTimestamp);
+    const delegateText = getGuardianDelegationTooltip(row);
+    const lines = [
+        row.trueRank ? `Top-50 Staker #${formatInteger(row.trueRank)}` : `Outside top-50 wallet #${formatInteger(displayRank || 0)}`,
+        row.contractSeatRank ? `Guardian slot #${formatInteger(row.contractSeatRank)}` : 'No guardian slot',
+    ];
+
+    if (status.label) lines.push(status.label);
+    if (stakerSince) lines.push(`Staker since ${stakerSince}`);
+    if (delegateText) lines.push(`Delegation: ${delegateText}`);
+    lines.push(`Current dCULT: ${formatTokenAmount(row.dcultBalance || '0', 0)} dCULT`);
+    lines.push(`Wallet CULT: ${formatTokenAmount(row.cultBalance || '0', 0)} CULT`);
+    lines.push(`Decided proposals: ${formatInteger(ids.length)}`);
+    if (ids.length) lines.push(ids.slice(0, 6).map((id) => `#${formatInteger(id)}`).join(' '));
+
+    return lines.join('\n');
+}
+
+function getGuardianDelegationTooltip(row) {
+    if (!Object.prototype.hasOwnProperty.call(row, 'currentDelegate')) return '';
+    const delegatee = getValidGuardianDelegate(row.currentDelegate);
+    if (!delegatee || delegatee.toLowerCase() === ZERO_ADDRESS) return 'none';
+    if (delegatee.toLowerCase() === String(row.wallet || '').toLowerCase()) return 'self';
+    return `delegated to ${delegatee}`;
+}
+
+function renderGuardianDelegationInfo(row) {
+    if (!Object.prototype.hasOwnProperty.call(row, 'currentDelegate')) return '';
+
+    const delegatee = getValidGuardianDelegate(row.currentDelegate);
+    if (!delegatee || delegatee.toLowerCase() === ZERO_ADDRESS) {
+        return '<span class="value-subline guardian-delegate-line">delegation: none</span>';
+    }
+
+    const wallet = String(row.wallet || '').toLowerCase();
+    if (delegatee.toLowerCase() === wallet) {
+        return '<span class="value-subline guardian-delegate-line">delegation: self</span>';
+    }
+
+    return `
+        <span class="value-subline guardian-delegate-line">
+            delegated to
+            <a class="wallet-address" href="${addressUrl(delegatee)}" target="_blank" rel="noopener noreferrer">${escapeHtml(shortAddress(delegatee))}</a>
+        </span>
+    `;
+}
+
+function renderGuardianStakerSinceInfo(row) {
+    const label = formatGuardianSinceDate(row?.stakerSinceTimestamp);
+    if (!label) return '';
+    return `<span class="value-subline guardian-staker-since-line">staker since ${escapeHtml(label)}</span>`;
+}
+
+function getValidGuardianDelegate(delegatee) {
+    try {
+        return ethers.utils.getAddress(delegatee || ZERO_ADDRESS);
+    } catch {
+        return ZERO_ADDRESS;
+    }
+}
+
+function renderGuardianSubmittedProposals(proposalIds) {
+    if (!proposalIds.length) return '';
+    const shown = proposalIds.slice(0, 6).map((id) => `#${formatInteger(id)}`).join(' ');
+    const extra = proposalIds.length > 6 ? ` +${formatInteger(proposalIds.length - 6)} more` : '';
+    return `<span class="value-subline">${escapeHtml(shown + extra)}</span>`;
+}
+
+function renderGuardianSimpleProposals(proposalIds) {
+    if (!proposalIds.length) return '<span class="guardian-simple-empty">-</span>';
+    const shown = proposalIds.slice(0, 3).map((id) => `#${formatInteger(id)}`).join(' ');
+    const extra = proposalIds.length > 3 ? ` +${formatInteger(proposalIds.length - 3)}` : '';
+    return `<span>${escapeHtml(shown + extra)}</span>`;
+}
+
+function getDecidedSubmittedProposalIds(proposalIds) {
+    if (!Array.isArray(proposalIds)) return [];
+    return proposalIds
+        .map((id) => Number(id || 0))
+        .filter((id) => Number.isFinite(id) && id > 0 && isStrictDecidedCachedProposal(cache?.proposals?.[String(id)]))
+        .sort((a, b) => b - a);
+}
+
+function getGuardianOverviewStatusMeta(status) {
+    if (status === 'in_both') return { label: '', className: '' };
+    if (status === 'true_top_only') return { label: 'Top-50 dCULT only', className: 'status-attention' };
+    if (status === 'contract_only') return { label: 'Guardian slot only', className: 'status-muted' };
+    return { label: 'Unknown', className: 'status-muted' };
+}
+
+function handleGuardianOverviewClick(event) {
+    const modeButton = event.target.closest('[data-guardian-view-mode]');
+    if (!modeButton) return;
+
+    const mode = modeButton.dataset.guardianViewMode === 'simple' ? 'simple' : 'detailed';
+    if (getGuardianOverviewViewMode() === mode) return;
+    guardianOverviewViewMode = mode;
+    try {
+        localStorage.setItem(GUARDIAN_VIEW_STORAGE_KEY, mode);
+    } catch {
+        // Non-critical preference.
+    }
+    renderGuardianOverview();
+}
+
+function applySavedGuardianOverviewViewMode() {
+    try {
+        guardianOverviewViewMode = localStorage.getItem(GUARDIAN_VIEW_STORAGE_KEY) === 'detailed' ? 'detailed' : 'simple';
+    } catch {
+        guardianOverviewViewMode = 'simple';
+    }
+}
+
+function getGuardianOverviewViewMode() {
+    return guardianOverviewViewMode === 'simple' ? 'simple' : 'detailed';
+}
+
+async function startGuardianOverviewRefresh() {
+    if (guardianOverviewPromise) return guardianOverviewPromise;
+    if (!readProvider || !dcultContract || !cultContract) {
+        renderGuardianOverview('Connect a wallet or public RPC to build the Guardians Overview.');
+        return null;
+    }
+
+    renderGuardianOverview('Building Guardians Overview. This scans current dCULT holders and compares them with contract guardian slots.');
+    guardianOverviewPromise = buildGuardianOverview()
+        .then(async (overview) => {
+            cache.guardianOverview = overview;
+            cache.updatedAt = Date.now();
+            await saveCache(cache);
+            renderGuardianOverview();
+            return overview;
+        })
+        .catch((error) => {
+            console.warn('Unable to build Guardians Overview:', error);
+            renderGuardianOverview(`Guardian overview paused: ${shortError(error)}`);
+            return null;
+        })
+        .finally(() => {
+            guardianOverviewPromise = null;
+            renderGuardianOverview();
+        });
+
+    return guardianOverviewPromise;
+}
+
+async function buildGuardianOverview() {
+    const currentBlock = latestSafeBlock || Math.max(DCULT_START_BLOCK, await readProvider.getBlockNumber() - FINALITY_BLOCKS);
+    const blockNumber = Math.max(DCULT_START_BLOCK, Number(currentBlock || DCULT_START_BLOCK));
+    const [holderIndex, contractSeatSnapshot] = await Promise.all([
+        getHolderSnapshotIndex(blockNumber),
+        fetchContractGuardianSeats(blockNumber),
+    ]);
+    const holderLedger = buildHolderLedgerFromIndex(holderIndex, blockNumber);
+    const contractSeats = contractSeatSnapshot.rows;
+    const trueTopRows = getTrueTopDcultRows(holderLedger, FALLBACK_GUARDIAN_COUNT);
+    const trueTopByAddress = new Map(trueTopRows.map((row) => [row.address.toLowerCase(), row]));
+    const contractByAddress = new Map(contractSeats.map((row) => [row.address.toLowerCase(), row]));
+    const addresses = Array.from(new Set([...trueTopByAddress.keys(), ...contractByAddress.keys()]))
+        .map((address) => ethers.utils.getAddress(address));
+    const [cultBalances, submittedProposals, firstDepositBlocks] = await Promise.all([
+        fetchCultBalances(addresses, blockNumber),
+        Promise.resolve(getSubmittedProposalsByAddress()),
+        fetchFirstGuardianDepositBlocks(addresses, blockNumber),
+    ]);
+    const firstDepositTimestamps = await fetchGuardianSinceTimestamps(firstDepositBlocks);
+
+    const rows = addresses.map((address) => {
+        const key = address.toLowerCase();
+        const trueTop = trueTopByAddress.get(key) || null;
+        const contractSeat = contractByAddress.get(key) || null;
+        const balance = trueTop?.balance || (holderLedger.balances.get(key) || 0n).toString();
+        const delegatee = getGuardianLedgerDelegate(holderLedger, key);
+        const stakerSinceBlock = firstDepositBlocks.get(key) || null;
+        return {
+            wallet: address,
+            trueRank: trueTop?.rank || null,
+            contractSeatRank: contractSeat?.seatRank || null,
+            contractSlotIndex: contractSeat?.slotIndex ?? null,
+            stakerSinceBlock,
+            stakerSinceTimestamp: stakerSinceBlock ? (firstDepositTimestamps.get(stakerSinceBlock) || 0) : 0,
+            status: getGuardianOverviewStatus(trueTop, contractSeat),
+            currentDelegate: delegatee,
+            delegationStatus: getGuardianDelegationStatus(address, delegatee),
+            dcultBalance: balance,
+            contractDeposited: contractSeat?.amount || '0',
+            cultBalance: cultBalances.get(key) || '0',
+            submittedProposalIds: submittedProposals.get(key) || [],
+        };
+    }).sort(sortGuardianOverviewRows);
+
+    const overlap = rows.filter((row) => row.trueRank && row.contractSeatRank).length;
+    const trueTopOnly = rows.filter((row) => row.trueRank && !row.contractSeatRank).length;
+    const contractOnly = rows.filter((row) => !row.trueRank && row.contractSeatRank).length;
+
+    return {
+        schema: GUARDIAN_OVERVIEW_SCHEMA,
+        dcult: DCULT_ADDRESS,
+        cult: CULT_ADDRESS,
+        blockNumber,
+        rows,
+        summary: {
+            overlap,
+            trueTopOnly,
+            contractOnly,
+            trueTopCount: trueTopRows.length,
+            contractGuardianCount: contractSeats.length,
+            contractSlotsChecked: contractSeatSnapshot.slotsChecked,
+            contractEmptySlotCount: contractSeatSnapshot.emptySlots.length,
+            contractFailedSlotCount: contractSeatSnapshot.failedSlots.length,
+            contractEmptySlots: contractSeatSnapshot.emptySlots,
+            contractFailedSlots: contractSeatSnapshot.failedSlots,
+            contractThresholdDcult: contractSeatSnapshot.thresholdAmount,
+        },
+        updatedAt: Date.now(),
+    };
+}
+
+function buildHolderLedgerFromIndex(index, blockNumber) {
+    const ledger = createHolderSnapshotLedger();
+    for (const event of index.events) {
+        if (event.blockNumber > blockNumber) break;
+        applyHolderSnapshotEvent(ledger, event);
+    }
+    return ledger;
+}
+
+async function fetchGuardianSinceTimestamps(sinceBlocks) {
+    const uniqueBlocks = Array.from(new Set(Array.from(sinceBlocks.values()).filter(Boolean)));
+    const timestamps = new Map();
+    if (!uniqueBlocks.length || !readProvider?.getBlock) return timestamps;
+
+    await mapLimit(uniqueBlocks, CALL_CONCURRENCY, async (blockNumber) => {
+        const cachedTimestamp = getCachedBlockTimestamp(blockNumber);
+        if (cachedTimestamp) {
+            timestamps.set(blockNumber, cachedTimestamp);
+            return;
+        }
+
+        try {
+            const blockData = await withTimeout(readProvider.getBlock(blockNumber), 10_000, `block ${blockNumber} timestamp`);
+            const timestamp = Number(blockData?.timestamp || 0);
+            if (!timestamp) return;
+            timestamps.set(blockNumber, timestamp);
+            cache.blockTimestamps = cache.blockTimestamps && typeof cache.blockTimestamps === 'object' ? cache.blockTimestamps : {};
+            cache.blockTimestamps[String(blockNumber)] = timestamp;
+        } catch (error) {
+            console.warn(`Unable to fetch guardian since timestamp for block ${blockNumber}:`, error);
+        }
+    });
+
+    return timestamps;
+}
+
+async function fetchFirstGuardianDepositBlocks(addresses, blockNumber) {
+    const firstBlocks = new Map();
+    const uniqueAddresses = Array.from(new Set((addresses || [])
+        .map((address) => {
+            try {
+                return ethers.utils.getAddress(address);
+            } catch {
+                return null;
+            }
+        })
+        .filter(Boolean)));
+    if (!uniqueAddresses.length || blockNumber < DCULT_START_BLOCK) return firstBlocks;
+
+    const poolTopic = uint256Topic(GUARDIAN_POOL_ID);
+    for (const addressChunk of chunkArray(uniqueAddresses, ADDRESS_TOPIC_CHUNK_SIZE)) {
+        const topics = addressChunk.map(addressTopic);
+        const logs = await getLogsWithSplit({
+            address: DCULT_ADDRESS,
+            topics: [DEPOSIT_TOPIC, topics, poolTopic],
+            fromBlock: ethers.utils.hexValue(DCULT_START_BLOCK),
+            toBlock: ethers.utils.hexValue(blockNumber),
+        }, HISTORY_LOG_CHUNK_SIZE);
+
+        logs.sort(sortLogsAsc);
+        for (const log of logs) {
+            if (!log?.topics || log.topics.length < 3) continue;
+            const user = topicToAddress(log.topics[1]).toLowerCase();
+            if (firstBlocks.has(user)) continue;
+            firstBlocks.set(user, parseRpcNumber(log.blockNumber));
+        }
+    }
+
+    return firstBlocks;
+}
+
+function getTrueTopDcultRows(ledger, limit) {
+    return Array.from(ledger.balances.entries())
+        .filter(([, balance]) => balance > 0n)
+        .sort(([addressA, balanceA], [addressB, balanceB]) => {
+            if (balanceA === balanceB) return addressA.localeCompare(addressB);
+            return balanceA > balanceB ? -1 : 1;
+        })
+        .slice(0, limit)
+        .map(([address, balance], index) => ({
+            rank: index + 1,
+            address: ethers.utils.getAddress(address),
+            balance: balance.toString(),
+        }));
+}
+
+async function fetchContractGuardianSeats(blockNumber) {
+    const limit = FALLBACK_GUARDIAN_COUNT;
+    const rows = [];
+    const emptySlots = [];
+    const failedSlots = [];
+    let thresholdAmount = '0';
+
+    await mapLimit(Array.from({ length: limit }, (_, index) => index), CALL_CONCURRENCY, async (index) => {
+        try {
+            const row = await dcultContract.highestStakerInPool(GUARDIAN_POOL_ID, index, { blockTag: blockNumber });
+            const rawAddress = getContractGuardianAddress(row);
+            const address = ethers.utils.getAddress(rawAddress);
+            const amount = getContractGuardianAmount(row).toString();
+            if (index === 0) thresholdAmount = amount;
+            if (address.toLowerCase() === ZERO_ADDRESS) {
+                emptySlots.push(index);
+                return;
+            }
+            rows.push({
+                address,
+                amount,
+                slotIndex: index,
+                seatRank: limit - index,
+            });
+        } catch {
+            failedSlots.push(index);
+            // Empty historical slots and archive gaps are tolerated per slot.
+        }
+    });
+
+    return {
+        rows: rows
+            .filter(Boolean)
+            .sort((a, b) => (a.seatRank - b.seatRank) || a.address.localeCompare(b.address)),
+        slotsChecked: limit,
+        emptySlots: emptySlots.sort((a, b) => a - b),
+        failedSlots: failedSlots.sort((a, b) => a - b),
+        thresholdAmount,
+    };
+}
+
+function getContractGuardianAmount(row) {
+    return row?.[0] || row?.deposited || row?.amount || row?.balance || '0';
+}
+
+function getContractGuardianAddress(row) {
+    return row?.[1] || row?.addr || ZERO_ADDRESS;
+}
+
+async function fetchCultBalances(addresses, blockNumber) {
+    const balances = new Map();
+    await mapLimit(addresses, CALL_CONCURRENCY, async (address) => {
+        try {
+            const balance = await cultContract.balanceOf(address, { blockTag: blockNumber });
+            balances.set(address.toLowerCase(), balance.toString());
+        } catch {
+            balances.set(address.toLowerCase(), '0');
+        }
+    });
+    return balances;
+}
+
+function getSubmittedProposalsByAddress() {
+    const submitted = new Map();
+    for (const cachedProposal of Object.values(cache?.proposals || {})) {
+        if (!isStrictDecidedCachedProposal(cachedProposal)) continue;
+        const proposer = cachedProposal?.proposal?.proposer;
+        const id = Number(cachedProposal?.id || cachedProposal?.proposal?.id || 0);
+        if (!proposer || !Number.isFinite(id) || id <= 0) continue;
+        const key = proposer.toLowerCase();
+        if (!submitted.has(key)) submitted.set(key, []);
+        submitted.get(key).push(id);
+    }
+
+    for (const ids of submitted.values()) {
+        ids.sort((a, b) => b - a);
+    }
+    return submitted;
+}
+
+function isStrictDecidedCachedProposal(cachedProposal) {
+    const state = Number(cachedProposal?.proposal?.state ?? cachedProposal?.state);
+    return [3, 4, 5, 7].includes(state);
+}
+
+function getGuardianOverviewStatus(trueTop, contractSeat) {
+    if (trueTop && contractSeat) return 'in_both';
+    if (trueTop) return 'true_top_only';
+    if (contractSeat) return 'contract_only';
+    return 'unknown';
+}
+
+function getGuardianLedgerDelegate(holderLedger, addressKey) {
+    const delegatee = holderLedger.delegates.get(String(addressKey || '').toLowerCase()) || ZERO_ADDRESS;
+    return getValidGuardianDelegate(delegatee);
+}
+
+function getGuardianDelegationStatus(wallet, delegatee) {
+    const normalizedDelegate = getValidGuardianDelegate(delegatee);
+    if (normalizedDelegate.toLowerCase() === ZERO_ADDRESS) return 'none';
+    if (normalizedDelegate.toLowerCase() === String(wallet || '').toLowerCase()) return 'self';
+    return 'third_party';
+}
+
+function sortGuardianOverviewRows(a, b) {
+    const rankA = a.trueRank || Number.MAX_SAFE_INTEGER;
+    const rankB = b.trueRank || Number.MAX_SAFE_INTEGER;
+    return (rankA - rankB)
+        || ((a.contractSeatRank || Number.MAX_SAFE_INTEGER) - (b.contractSeatRank || Number.MAX_SAFE_INTEGER))
+        || String(a.wallet).localeCompare(String(b.wallet));
 }
 
 function handleProposalFilterChange(event) {
@@ -7421,6 +8172,19 @@ function createEmptyCache() {
         txSources: {},
         blockTimestamps: {},
         cultSupply: createEmptyCultSupplyCache(),
+        guardianOverview: createEmptyGuardianOverviewCache(),
+        updatedAt: null,
+    };
+}
+
+function createEmptyGuardianOverviewCache() {
+    return {
+        schema: GUARDIAN_OVERVIEW_SCHEMA,
+        dcult: DCULT_ADDRESS,
+        cult: CULT_ADDRESS,
+        blockNumber: 0,
+        rows: [],
+        summary: null,
         updatedAt: null,
     };
 }
@@ -7454,6 +8218,20 @@ function normalizeCultSupplyCache(storedSupplyCache) {
         uniswapPair: UNISWAP_PAIR_ADDRESS,
         burnWallets: Array.isArray(storedSupplyCache.burnWallets) ? storedSupplyCache.burnWallets : [...CULT_BURN_WALLETS],
         samples: storedSupplyCache.samples && typeof storedSupplyCache.samples === 'object' ? storedSupplyCache.samples : {},
+    };
+}
+
+function normalizeGuardianOverviewCache(storedGuardianCache) {
+    if (!storedGuardianCache || typeof storedGuardianCache !== 'object') return createEmptyGuardianOverviewCache();
+    if (String(storedGuardianCache.schema || '') !== GUARDIAN_OVERVIEW_SCHEMA) return createEmptyGuardianOverviewCache();
+    if (String(storedGuardianCache.dcult || '').toLowerCase() !== DCULT_ADDRESS.toLowerCase()) return createEmptyGuardianOverviewCache();
+    if (String(storedGuardianCache.cult || '').toLowerCase() !== CULT_ADDRESS.toLowerCase()) return createEmptyGuardianOverviewCache();
+
+    return {
+        ...createEmptyGuardianOverviewCache(),
+        ...storedGuardianCache,
+        rows: Array.isArray(storedGuardianCache.rows) ? storedGuardianCache.rows : [],
+        summary: storedGuardianCache.summary && typeof storedGuardianCache.summary === 'object' ? storedGuardianCache.summary : null,
     };
 }
 
@@ -7496,6 +8274,7 @@ function normalizeStoredCache(storedCache) {
         txSources: storedCache.txSources && typeof storedCache.txSources === 'object' ? storedCache.txSources : {},
         blockTimestamps: storedCache.blockTimestamps && typeof storedCache.blockTimestamps === 'object' ? storedCache.blockTimestamps : {},
         cultSupply: normalizeCultSupplyCache(storedCache.cultSupply),
+        guardianOverview: normalizeGuardianOverviewCache(storedCache.guardianOverview),
     };
 }
 
@@ -7519,14 +8298,16 @@ function compareCacheCandidates(a, b) {
 }
 
 function getCacheUsefulnessScore(candidateCache) {
-    return Object.values(candidateCache?.proposals || {}).reduce((score, proposal) => {
-        let nextScore = score + 1;
-        if (Array.isArray(proposal?.zeroWallets)) nextScore += 2;
-        if (hasStoredDelegateDutyMetrics(proposal)) nextScore += 20;
-        if (hasStoredHolderSnapshotMetrics(proposal)) nextScore += 5;
-        if (hasStoredDelegateOwnPower(proposal?.delegateDuty)) nextScore += 2;
-        return nextScore;
+    let score = Object.values(candidateCache?.proposals || {}).reduce((nextScoreTotal, proposal) => {
+        let proposalScore = 1;
+        if (Array.isArray(proposal?.zeroWallets)) proposalScore += 2;
+        if (hasStoredDelegateDutyMetrics(proposal)) proposalScore += 20;
+        if (hasStoredHolderSnapshotMetrics(proposal)) proposalScore += 5;
+        if (hasStoredDelegateOwnPower(proposal?.delegateDuty)) proposalScore += 2;
+        return nextScoreTotal + proposalScore;
     }, 0);
+    if (Array.isArray(candidateCache?.guardianOverview?.rows) && candidateCache.guardianOverview.rows.length) score += 15;
+    return score;
 }
 
 async function loadStaticCacheSeed() {
@@ -8110,8 +8891,20 @@ function formatBlockDate(timestamp) {
     });
 }
 
+function formatGuardianSinceDate(timestamp) {
+    const seconds = Number(timestamp || 0);
+    if (!Number.isFinite(seconds) || seconds <= 0) return '';
+    const date = new Date(seconds * 1000);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toISOString().slice(0, 10).replace(/-/g, '/');
+}
+
 function addressTopic(address) {
     return ethers.utils.hexZeroPad(ethers.utils.getAddress(address), 32).toLowerCase();
+}
+
+function uint256Topic(value) {
+    return ethers.utils.hexZeroPad(ethers.BigNumber.from(value || 0).toHexString(), 32).toLowerCase();
 }
 
 function topicToAddress(topic) {

@@ -17,7 +17,10 @@
         <div class="checker-gate-modal">
             <h4 id="checker-gate-title">Check at least one wallet delegation first</h4>
             <p>Run the Delegation Checker once, then Dashboard and Past Proposals unlock here. No wallet connection is needed.</p>
-            <button id="checker-gate-close" class="text-button checker-gate-close" type="button">Close</button>
+            <div class="checker-gate-actions">
+                <button id="checker-gate-close" class="text-button checker-gate-close" type="button">Close</button>
+                <button id="checker-gate-skip" class="text-button checker-gate-skip" type="button">Skip at own risk</button>
+            </div>
         </div>
     </div>
     <div class="container">
@@ -221,6 +224,23 @@
                         <div class="proposal-list-footer">
                             <span id="proposal-visible-count" class="event-meta">...</span>
                             <button id="show-more-proposals" class="toggle-button" type="button">Load Older Proposals</button>
+                        </div>
+                    </section>
+                </div>
+            </details>
+            <details class="tool-details guardians-tool-details">
+                <summary><h2>Guardians Overview</h2></summary>
+                <div class="tool-details-content">
+                    <section class="ui-section guardians-section" aria-labelledby="guardians-overview-title">
+                        <div class="section-heading">
+                            <div>
+                                <h4 id="guardians-overview-title">Guardians Overview</h4>
+                                <p id="guardians-overview-status" class="status-line">Current contract guardian slots compared with reconstructed top-50 dCULT holders.</p>
+                            </div>
+                            <button id="refresh-guardians-overview" class="toggle-button" type="button">Refresh Guardians</button>
+                        </div>
+                        <div id="guardians-overview" class="guardians-overview">
+                            <p class="empty-state">No guardian overview data yet.</p>
                         </div>
                     </section>
                 </div>

@@ -7,6 +7,7 @@ The main page is organized into these sections:
 - **Delegation Checker**: paste one or more wallet addresses and check whether they are ready to vote. This does not require connecting a wallet.
 - **Dashboard**: visual summaries for supply, participation, voting-power sources, missed voting power, delegatee reliability, and proposal risk.
 - **Past Proposals**: searchable historical proposal cards with outcome status, summary donuts, details, zero-weight voters, and delegatee-duty rows.
+- **Guardians Overview**: compares current contract guardian slots with the reconstructed current top-50 dCULT stakers.
 
 Legacy aggregate tables are kept in the hidden Pre-retirement section for reference while the dashboard and proposal views replace them.
 
@@ -43,12 +44,12 @@ If using GitHub Pages from the repository root, place `historical-cult-governanc
 
 ## Updating Historical Data
 
-Historical proposal data is cached in the browser with IndexedDB. The menu has two relevant actions:
+Historical proposal data is cached in the browser with IndexedDB. The same exported dataset can also include locally refreshed supply samples and the Guardians Overview. The menu has two relevant actions:
 
 - **Rebuild index**: clears local cache and scans again.
 - **Export static dataset**: downloads `historical-cult-governance-data.json` from the current local cache.
 
-For publishing, rebuild/index locally, export the static dataset, then replace the published `historical-cult-governance-data.json`. Visitors can load that static dataset into their own browser cache and only need live RPC for newer or missing data.
+For publishing, rebuild/index locally, refresh optional cached sections such as Guardians Overview, export the static dataset, then replace the published `historical-cult-governance-data.json`. Visitors can load that static dataset into their own browser cache and only need live RPC for newer or missing data.
 
 ## Delegation Checker
 
@@ -202,6 +203,25 @@ Each row shows:
 - historical duty record
 
 The **Duty Record** shows how often the delegatee represented attached wallets across reportable proposals, how much delegated dCULT was missed, and the latest proposal/date where the delegatee fulfilled duty.
+
+## Guardians Overview
+
+This section reconciles two different guardian views:
+
+- **Contract guardian slots**: reads `highestStakerInPool(0, index)` for slot indexes `0..49`.
+- **Current top-50 dCULT stakers**: reconstructs current dCULT holder balances from dCULT `Transfer` logs, sorts by current dCULT amount, and takes the top 50.
+
+The overview donut shows how many current top-50 dCULT stakers are inside versus outside the contract guardian slots. The right-side summary compares:
+
+- **Guardian threshold**: `highestStakerInPool(0, 0)[0]`, the same threshold amount shown by the hub.
+- **Top-50 floor**: the lowest current dCULT balance in the reconstructed top-50 holder list.
+- **Gap**: the difference between the contract threshold and the current top-50 floor.
+
+To update guardian status, stake some CULT or claim rewards and stake them.
+
+Rows list the union of both sets. Detailed mode shows top-50 rank, guardian slot when present, wallet, first pool-0 dCULT staking deposit date (`staker since`), current dCULT, wallet CULT, current dCULT delegation status, and decided submitted proposals. Simple mode shows rank, wallet, current dCULT, and decided submitted proposals, with the extra row context available from the rank badge tooltip. Canceled proposals are excluded from this submitted-proposal count.
+
+Use **Refresh Guardians** to rebuild this section. The result is saved in the normal cache and included in `historical-cult-governance-data.json` when exported.
 
 ## Proposal Details
 
